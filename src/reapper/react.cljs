@@ -175,7 +175,15 @@
                     (as-element result)))
         display-name (when-let [s (or (.-displayName component)
                                       (.-name component))]
-                       s)]
+                       (if *assert*
+                         (let [parts (string/split s #"\$")
+                               ns-parts (pop parts)
+                               name-part (peek parts)]
+                           (-> (if (seq ns-parts)
+                                 (str (string/join "." ns-parts) "/" name-part)
+                                 name-part)
+                               (string/replace #"_" "-")))
+                         s))]
     (unchecked-set wrapper "displayName" display-name)
     wrapper))
 
