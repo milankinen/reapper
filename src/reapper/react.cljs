@@ -218,6 +218,42 @@
       (some? (.-$$typeof type)) (create-native-component-element type props children)
       :else (throw (js/Error. (str "Invalid hiccup tag type: " (type type)))))))
 
+(defn- wrap-eff [eff]
+  (fn effect-wrapper []
+    (let [cancel (eff)]
+      (when (fn? cancel)
+        cancel))))
+
+(def ^:private deps-interns
+  (js/Map.))
+
+(defn- intern-dependency [x]
+  (let [s (str x)]
+    (or (.get deps-interns s)
+        (do (.set deps-interns s x)
+            x))))
+
+(defn- ->js-deps-array [deps]
+  (when deps
+    (let [js-deps #js []]
+      (doseq [x deps]
+        (->> (cond
+               (keyword? x) (intern-dependency x)
+               (symbol? x) (intern-dependency x)
+               (uuid? x) (pr-str x)
+               :else x)
+             (.push js-deps)))
+      js-deps)))
+
+(defn- context? [x]
+  (and (some? x)
+       (some? (unchecked-get x "Provider"))))
+
+(defn- debug-value-formatter [x]
+  (if-not (primitive? x)
+    (pr-str x)
+    x))
+
 ;;;;;
 
 (defn as-element
@@ -274,3 +310,262 @@
   [hiccup container]
   {:pre [(instance? js/Node container)]}
   (react-dom/render (as-element hiccup) container))
+
+(defn create-context
+  "Wrapper for React [`createContext`](https://reactjs.org/docs/context.html#reactcreatecontext).
+   For more details, see the official
+   [React docs](https://reactjs.org/docs/context.html)."
+  ([] (create-context nil))
+  ([default-value]
+   (reactjs/createContext default-value)))
+
+(defn use-state
+  "Wrapper for React [`useState`](https://reactjs.org/docs/hooks-reference.html#usestate) hook.
+   Uses ClojureScript's value equality for state change detection and
+   re-rendering. Otherwise behaves like native JavaScript version.
+
+   ```clojure
+   ;; Basic usage
+   (let [[state set-state] (use-state 0)]
+     ;; Accepts values
+     (set-state 1)
+     ;; Accepts functions
+     (set-state inc)
+     ...)
+
+   ;; Lazy state initalization
+   (let [[state set-state] (use-state (fn [] (get-expensive-state)))]
+     ...)
+
+   ;; Clojure value equality
+   (let [[state set-state] (use-state {:foo 12})
+     (set-state {:foo 12}) ;; wont trigger state change
+     ...)
+   ```
+
+   For more details, see the official [React docs](https://reactjs.org/docs/hooks-state.html)."
+  [initial]
+  (let [xs (reactjs/useState initial)
+        state (aget xs 0)
+        js-set-state (aget xs 1)
+        set-state (or (unchecked-get js-set-state wrapper-key)
+                      (let [f (fn [next]
+                                (js-set-state
+                                  (fn [v']
+                                    (let [v (if (fn? next) (next v') next)]
+                                      (if (= v v') v' v)))))]
+                        (unchecked-set js-set-state wrapper-key f)
+                        f))]
+    [state set-state]))
+
+(defn use-reducer
+  "Wrapper for React [`useReducer`](https://reactjs.org/docs/hooks-reference.html#usereducer) hook.
+   Like [[use-state]], uses ClojureScript's value equality for state
+   change detection and re-rendering. Otherwise behaves like native
+   JavaScript version.
+
+   ```clojure
+   (defn reducer [count {:keys [type]}]
+     (case type
+       :inc (inc count)
+       :dec (dec count)
+       :reset 0))
+
+   ;; Basic usage
+   (let [[count dispatch] (use-reducer reducer 0)]
+     (dispatch {:type :inc})
+     ...)
+
+   ;; Lazy state initalization
+   (let [[count dispatch] (use-reducer reducer 0 (fn [n] (get-expensive-counter-initial n)))]
+     ...)
+   ```
+
+   For more details, see the official [React docs](https://reactjs.org/docs/hooks-state.html)."
+  ([reducer initial-arg]
+   (use-reducer reducer initial-arg identity))
+  ([reducer initial-arg init]
+   {:pre [(fn? reducer)
+          (fn? init)]}
+   (let [cljs-reducer (reactjs/useCallback
+                        (fn [state action]
+                          (let [state' (reducer state action)]
+                            (if (not= state' state)
+                              state'
+                              state)))
+                        #js [reducer])
+         xs (reactjs/useReducer cljs-reducer initial-arg init)
+         state (aget xs 0)
+         dispatch (aget xs 1)]
+     [state dispatch])))
+
+(defn use-ref
+  "Wrapper for React [`useRef`](https://reactjs.org/docs/hooks-reference.html#useref) hook.
+   Returns ClojureScript atom instead of plain mutable JS object. All
+   Clojure's atom operations (like `reset!`, `swap!` and `add-watch`)
+   are supported. Current value can be obtained by dereferencing the atom.
+   The atom can also be used directly as `:ref` in intrinsic elements.
+
+   ```clojure
+   (let [input (use-ref nil)
+         _     (use-effect (fn [] (js/console.log \"Input is:\" @node) [])]
+     [input {:ref input
+             ...}])
+   ```"
+  [initial]
+  (let [js-ref (reactjs/useRef nil)]
+    (or (unchecked-get js-ref "current")
+        (let [a (atom initial)]
+          (assert (identical? js/undefined (.-current a)))
+          ;; For React ref interrop
+          (js/Object.defineProperty
+            a
+            "current"
+            #js {:get (fn [] @a)
+                 :set (fn [val] (reset! a val))}
+            a)))))
+
+(defn use-effect
+  "Wrapper for React [`useEffect`](https://reactjs.org/docs/hooks-reference.html#useeffect) hook.
+   Like the JS version, uses reference equality for dependency change
+   detection, treating the following types as 'value' types in addition
+   to the JS primitives:
+
+     * Keywords
+     * Symbols
+     * uuids
+
+  Effect canceling function **must** satisfy `fn?` (in other words, it
+  must be a function instead of `IFn` such as map or keyword). This
+  enforces `use-effect` caller to explicitly define the cancellation
+  and mitigates the risk of accidentally setting up the cancellation
+  due to the implicit return value of the effect function.
+
+  ```clojure
+  (let [[status set-status] (use-state :initial)
+         _ (use-effect
+             (fn []
+               (let [title (case status
+                             :initial \"Initial\"
+                             :loading \"Loading..\"
+                             \"...\")
+                 (set! js/document -title title)))
+             [status])
+     ...)
+   ```
+
+   For more details, see the official [React docs](https://reactjs.org/docs/hooks-effect.html).
+
+   **Tip:** If you need \"deep\" comparison for other ClojureScript
+   data types such as collections, use can use Clojure's `hash` function
+   as a dependency. However, use this with caution because it may cause
+   some unwanted performance issues.
+
+   ```clojure
+   (let [[nums set-nums] (use-state [1 2 3])
+         _ (use-effect (fn [] ...) [(hash nums)])]
+     ...)
+   ```"
+  [eff deps]
+  {:pre [(fn? eff)
+         (or (vector? deps)
+             (nil? deps))]}
+  (reactjs/useEffect (wrap-eff eff) (->js-deps-array deps)))
+
+(defn use-layout-effect
+  "Wrapper for React [`useLayoutEffect`](https://reactjs.org/docs/hooks-reference.html#uselayouteffect) hook.
+   Like the JS version, uses reference equality for dependency change
+   detection, treating the following types as 'value' types in addition
+   to the JS primitives:
+
+     * Keywords
+     * Symbols
+     * uuids
+
+  Effect canceling function **must** satisfy `fn?` (in other words, it
+  must be a function instead of `IFn` such as map or keyword). This
+  enforces `use-effect` caller to explicitly define the cancellation
+  and mitigates the risk of accidentally setting up the cancellation
+  due to the implicit return value of the effect function.
+
+  ```clojure
+  (let [[status set-status] (use-state :initial)
+         _ (use-layout-effect
+             (fn []
+               (let [title (case status
+                             :initial \"Initial\"
+                             :loading \"Loading..\"
+                             \"...\")
+                 (set! js/document -title title)))
+             [status])
+     ...)
+   ```
+
+   For more details, see the official [React docs](https://reactjs.org/docs/hooks-effect.html).
+
+   **Tip:** If you need \"deep\" comparison for other ClojureScript
+   data types such as collections, use can use Clojure's `hash` function
+   as a dependency. However, use this with caution because it may cause
+   some unwanted performance issues.
+
+   ```clojure
+   (let [[nums set-nums] (use-state [1 2 3])
+         _ (use-layout-effect (fn [] ...) [(hash nums)])]
+     ...)
+   ```"
+  [eff deps]
+  {:pre [(fn? eff)
+         (or (vector? deps)
+             (nil? deps))]}
+  (reactjs/useLayoutEffect (wrap-eff eff) (->js-deps-array deps)))
+
+(defn use-memo
+  "Wrapper for React [`useMemo`](https://reactjs.org/docs/hooks-reference.html#usememo) hook.
+   Like the JS version, uses reference equality for dependency change
+   detection, treating the following types as 'value' types in addition
+   to the JS primitives:
+
+     * Keywords
+     * Symbols
+     * uuids
+  "
+  [f deps]
+  {:pre [(fn? f)
+         (or (vector? deps)
+             (nil? deps))]}
+  (reactjs/useMemo f (->js-deps-array deps)))
+
+(defn use-callback
+  "Wrapper for React [`useCallback`](https://reactjs.org/docs/hooks-reference.html#usecallback) hook.
+   Like the JS version, uses reference equality for dependency change
+   detection, treating the following types as 'value' types in addition
+   to the JS primitives:
+
+     * Keywords
+     * Symbols
+     * uuids
+  "
+  [cb deps]
+  {:pre [(fn? cb)
+         (or (vector? deps)
+             (nil? deps))]}
+  (reactjs/useCallback cb (->js-deps-array deps)))
+
+(defn use-context
+  "Wrapper for React [`useContext`](https://reactjs.org/docs/hooks-reference.html#usecontext) hook.
+   The given context object must be obtained either from `React.createContext`
+   or Reapper's [[create-context]].
+  "
+  [context]
+  {:pre [(context? context)]}
+  (reactjs/useContext context))
+
+(defn use-debug-value
+  "Wrapper for React [`useDebugValue`](https://reactjs.org/docs/hooks-reference.html#usedebugvalue) hook.
+   Formats non-primitive values with `pr-str` but this behaviour
+   can be changed by providing a custom formatter as a second
+   parameter to the hook."
+  ([value] (reactjs/useDebugValue value debug-value-formatter))
+  ([value formatter]
+   {:pre [(fn? formatter)]}
+   (reactjs/useDebugValue value formatter)))
