@@ -1,21 +1,12 @@
 # reapper
-[![Build Status](https://travis-ci.org/milankinen/reapper.svg?branch=master)](https://travis-ci.org/milankinen/reapper)
-[![codecov](https://codecov.io/gh/milankinen/reapper/branch/master/graph/badge.svg)](https://codecov.io/gh/milankinen/reapper)
-[![Clojars Project](https://img.shields.io/clojars/v/reapper.svg)](https://clojars.org/reapper)
 
-A Clojure library designed to ... well, that part is up to you.
+A thin React wrapper for ClojureScript
 
-```clj
-[reapper "0.0.0"]
-```
-
-## Usage
-
-FIXME
+[![Build Status](https://img.shields.io/github/workflow/status/milankinen/reapper/Run%20tests/master?style=flat-square)](https://github.com/milankinen/reapper/actions?query=workflow%3A%22Run+tests%22)
+[![Clojars Project](https://img.shields.io/clojars/v/reapper.svg?style=flat-square)](https://clojars.org/reapper)
+[![cljdoc](https://img.shields.io/badge/cljdoc-latest-blue?style=flat-square)](https://cljdoc.org/d/reapper/reapper/CURRENT)
 
 ## License
 
-Copyright © 2018 FIXME
+MIT
 
-Distributed under the Eclipse Public License either version 1.0 or (at
-your option) any later version.
