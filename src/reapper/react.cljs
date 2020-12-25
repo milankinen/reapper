@@ -221,18 +221,14 @@
 ;;;;;
 
 (defn as-element
-  "Converts ClojureScript styled element (e.g. hiccup) to native
-   React element. Normally you shouldn't use this from you CLJS
-   codebase. Main use case is JavaScript library interoperability.
+  "Converts a ClojureScript hiccup element to a native JavaScript
+   React element. Normally you shouldn't need to use this from your
+   CLJS codebase directly. Main use case is JS library interrop when
+   you need to return JSX from your ClojureScript component(s) to a
+   JavaScript React higher order component.
+
    ```clojure
-   ;; the following lines are equivalent
-   (as-element [:button {:disabled true} \"tsers\"])
-   (create-element \"button\" #js {:disabled true} \"tsers\")
-   ;; conversion is done for entire hiccup
-   (def app-el
-     (as-element [:div.app
-                  [sidebar {:version 123 :title \"tsers\"]
-                  [main {}]]))
+   ;; TODO example here
    ```"
   [x]
   (cond
@@ -246,14 +242,35 @@
     (satisfies? IPrintWithWriter x) (pr-str x)
     :else x))
 
-(def create-element
-  "Native React.createElement. Does **not** perform any conversions,
-   see [[as-element]] if you need to convert hiccup elements to
-   native React elements."
-  reactjs/createElement)
+(defn create-element
+  "Equivalent to `React.createElement` but accepts only ClojureScript
+   data structures as props and children. Normally you shouldn't need
+   to use this from your CLJS codebase directly. Main use case is JS
+   library interrop when you need to render a native JavaScript
+   component in your CLJS component.
+
+   ```clojure
+   ;; TODO example here
+   ```"
+  [type props & children]
+  {:pre [(map? props)]}
+  (let [children (unwrap-delegated-children children)]
+    (create-native-component-element type props children)))
 
 (defn render
-  "Renders the given hiccup into the given container element"
+  "Renders the given hiccup into the given container element. See
+   [React's documentation](https://reactjs.org/docs/rendering-elements.html)
+   for more details.
+
+   ```clojure
+   (ns example
+     (:require [reapper.react :refer [render]]))
+
+   (def root
+     (js/document.getElementById \"root\"))
+
+   (render [:h1 \"Tsers!\"] root)
+   ```"
   [hiccup container]
   {:pre [(instance? js/Node container)]}
   (react-dom/render (as-element hiccup) container))
