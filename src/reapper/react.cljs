@@ -1,7 +1,7 @@
 (ns reapper.react
   (:require [clojure.string :as string]
             ["react" :as reactjs]
-            ["react/jsx-runtime" :refer [jsxs]]
+            ["react/jsx-runtime" :refer [jsxs Fragment]]
             ["react-dom" :as react-dom]))
 
 ;; Cache for parsed hiccup tags and converted js props
@@ -124,8 +124,8 @@
 (defn- create-fragment [props children]
   (let [jsx-props (->jsx-props props children)]
     (if-some [key (:key props)]
-      (jsxs reactjs/Fragment jsx-props (->jsx-prop-value key))
-      (jsxs reactjs/Fragment jsx-props))))
+      (jsxs Fragment jsx-props (->jsx-prop-value key))
+      (jsxs Fragment jsx-props))))
 
 (defn- create-intrinsic-element [parsed-tag props children]
   (let [jsx-props (->jsx-props props children)
