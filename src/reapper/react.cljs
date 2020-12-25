@@ -1,6 +1,7 @@
 (ns reapper.react
   (:require [clojure.string :as string]
             ["react" :as reactjs]
+            ["react/jsx-runtime" :refer [jsxs]]
             ["react-dom" :as react-dom]))
 
 ;; Cache for parsed hiccup tags and converted js props
@@ -14,15 +15,17 @@
 ;; Copied from reagent (originally copied from hiccup)
 (def ^:private re-tag #"([^\s\.#]+)(?:#([^\s\.#]+))?(?:\.([^\s#]+))?")
 
-(defn- parse-tag [hiccup-tag]
-  (let [tag-s (if (string? hiccup-tag) hiccup-tag (name hiccup-tag))]
-    (or (.get tag-cache tag-s)
-        (let [[tag id class] (->> tag-s (name) (re-matches re-tag) (next))
-              _ (assert tag (str "Invalid tag: '" tag-s "'"))
-              classes (some-> class (string/replace #"\." " "))
-              result #js {:tag tag :id id :classes classes}]
-          (.set tag-cache tag-s result)
-          result))))
+(defn- parse-string-tag [tag-s]
+  (or (.get tag-cache tag-s)
+      (let [[tag id class] (->> tag-s (name) (re-matches re-tag) (next))
+            _ (assert tag (str "Invalid tag: '" tag-s "'"))
+            classes (some-> class (string/replace #"\." " "))
+            result #js {:tag tag :id id :classes classes}]
+        (.set tag-cache tag-s result)
+        result)))
+
+(defn- parse-keyword-tag [hiccup-tag]
+  (parse-string-tag (name hiccup-tag)))
 
 (defn- camelize-prop-key [s]
   (if-not (string/starts-with? s "data-")
@@ -54,20 +57,20 @@
          (str ns "/"))
        (name kw)))
 
-(defn- keyword->js-prop-name [k]
+(defn- keyword->jsx-prop-name [k]
   (let [prop-s (name k)]
     (or (.get js-prop-cache prop-s)
         (let [res (camelize-prop-key prop-s)]
           (.set js-prop-cache prop-s res)
           res))))
 
-(defn- jsfy-prop-key [k]
+(defn- ->jsx-prop-key [k]
   (cond
-    (keyword? k) (keyword->js-prop-name k)
+    (keyword? k) (keyword->jsx-prop-name k)
     (string? k) k
     :else (throw (js/Error. (str "Invalid intrinsic property key" (pr-str k))))))
 
-(defn- jsfy-prop-value [x]
+(defn- ->jsx-prop-value [x]
   (cond
     (or (primitive? x)
         (fn? x)) x
@@ -75,60 +78,41 @@
     (symbol? x) (fq-name x)
     (map? x) (let [val #js {}]
                (doseq [[k v] x]
-                 (unchecked-set val (jsfy-prop-key k) (jsfy-prop-value v)))
+                 (unchecked-set val (->jsx-prop-key k) (->jsx-prop-value v)))
                val)
     (coll? x) (let [val #js []]
                 (doseq [v x]
-                  (.push val (jsfy-prop-value v)))
+                  (.push val (->jsx-prop-value v)))
                 val)
     (ifn? x) (fn [& args] (apply x args))
     (satisfies? IPrintWithWriter key) (pr-str key)
     :else x))
 
-(defn- jsfy-class-name [x]
+(defn- ->jsx-class-name [x]
   (cond
     (string? x) x
     (keyword? x) (name x)
     (symbol? x) (name x)
-    (map? x) (->> (keep (fn [[k v]] (when v (jsfy-class-name k))) x)
+    (map? x) (->> (keep (fn [[k v]] (when v (->jsx-class-name k))) x)
                   (string/join " "))
-    (coll? x) (->> (map jsfy-class-name x)
+    (coll? x) (->> (map ->jsx-class-name x)
                    (string/join " "))
     :else (pr-str x)))
 
-(defn- jsfy-element-props [props]
-  (if (some? props)
-    (let [js-props #js {}]
+(defn- ->jsx-props [props children]
+  (let [jsx-props #js {}]
+    (when (some? props)
       (doseq [[k v] props]
         (case k
-          :class (unchecked-set js-props "className" (jsfy-class-name v))
-          :children nil
-          (unchecked-set js-props (jsfy-prop-key k) (jsfy-prop-value v))))
-      js-props)
-    #js {}))
-
-(defn- $ [type js-props cljs-children]
-  (let [args #js [type js-props]]
-    (doseq [child cljs-children]
-      (.push args (as-element child)))
-    (.apply reactjs/createElement nil args)))
-
-(defn- create-fragment [props children]
-  ($ reactjs/Fragment (jsfy-element-props props) children))
-
-(defn- create-intrinsic-element [parsed-tag props children]
-  (let [js-props (jsfy-element-props props)
-        tag-name (unchecked-get parsed-tag "tag")
-        id (unchecked-get parsed-tag "id")
-        classes (unchecked-get parsed-tag "classes")]
-    (when (some? id)
-      (assert (nil? (unchecked-get js-props "id")) (str "Id defined twice for tag " tag-name))
-      (unchecked-set js-props "id" id))
-    (when (some? classes)
-      (if-let [class-names-from-props (unchecked-get js-props "className")]
-        (unchecked-set js-props "className" (str class-names-from-props " " classes))
-        (unchecked-set js-props "className" classes)))
-    ($ tag-name js-props children)))
+          (:key :children) nil
+          :class (unchecked-set jsx-props "className" (->jsx-class-name v))
+          (unchecked-set jsx-props (->jsx-prop-key k) (->jsx-prop-value v)))))
+    (when (seq children)
+      (let [js-children #js []]
+        (doseq [child children]
+          (.push js-children (as-element child)))
+        (unchecked-set jsx-props "children" js-children)))
+    jsx-props))
 
 (defn- unwrap-delegated-children [children]
   (when (seq children)
@@ -137,52 +121,78 @@
       (first children)
       children)))
 
-(defn- unwrap-props [wrapped-props]
-  (let [children (some-> (unchecked-get wrapped-props "c")
-                         (vary-meta assoc ::children true))
-        props (or (unchecked-get wrapped-props "p") {})]
-    (if children
-      (assoc props :children children)
-      props)))
+(defn- create-fragment [props children]
+  (let [jsx-props (->jsx-props props children)]
+    (if-some [key (:key props)]
+      (jsxs reactjs/Fragment jsx-props (->jsx-prop-value key))
+      (jsxs reactjs/Fragment jsx-props))))
 
-(defn- wrap-props [props children]
-  (if-some [key (:key props)]
-    #js {:p props :c children :key (jsfy-prop-value key)}
-    #js {:p props :c children}))
+(defn- create-intrinsic-element [parsed-tag props children]
+  (let [jsx-props (->jsx-props props children)
+        tag-name (unchecked-get parsed-tag "tag")
+        id (unchecked-get parsed-tag "id")
+        classes (unchecked-get parsed-tag "classes")]
+    (when (some? id)
+      (assert (nil? (unchecked-get jsx-props "id")) (str "Id defined twice for tag " tag-name))
+      (unchecked-set jsx-props "id" id))
+    (when (some? classes)
+      (if-let [class-names-from-props (unchecked-get jsx-props "className")]
+        (unchecked-set jsx-props "className" (str class-names-from-props " " classes))
+        (unchecked-set jsx-props "className" classes)))
+    (if-some [key (:key props)]
+      (jsxs tag-name jsx-props (->jsx-prop-value key))
+      (jsxs tag-name jsx-props))))
 
-(def ^:private wrapper-key (js/Symbol "reapper$$wrapper"))
-(def ^:private memo-wrapper-key (js/Symbol "reapper$$memo$$wrapper"))
+(defn- create-native-component-element [type props children]
+  (let [jsx-props (->jsx-props props children)]
+    (if-some [key (:key props)]
+      (jsxs type jsx-props (->jsx-prop-value key))
+      (jsxs type jsx-props))))
 
-(defn- display-name [comp]
-  (or (.-displayName comp)
-      (.-name comp)))
+(def ^:private wrapper-key
+  (js/Symbol "reapper$$wrapper"))
 
-(defn- wrapper-component [component]
-  (let [wrapper (fn [react-props]
-                  (-> (unwrap-props react-props)
-                      (component)
-                      (as-element)))]
-    (unchecked-set wrapper "displayName" (display-name component))
+(def ^:private memo-wrapper-key
+  (js/Symbol "reapper$$memo$$wrapper"))
+
+(defn- memo-eq [prev-js-props next-js-props]
+  (and (some? prev-js-props)
+       (some? next-js-props)
+       (= (unchecked-get prev-js-props "p")
+          (unchecked-get next-js-props "p"))
+       (= (unchecked-get prev-js-props "c")
+          (unchecked-get next-js-props "c"))))
+
+(defn- cljs-component-wrapper [component]
+  (let [wrapper (fn cljs-wrapper [js-props]
+                  (let [children (some-> (unchecked-get js-props "c")
+                                         (vary-meta assoc ::children true))
+                        props' (or (unchecked-get js-props "p") {})
+                        props (if children
+                                (assoc props' :children children)
+                                props')
+                        result (component props)]
+                    (as-element result)))
+        display-name (when-let [s (or (.-displayName component)
+                                      (.-name component))]
+                       s)]
+    (unchecked-set wrapper "displayName" display-name)
     wrapper))
 
-(defn- memo-eq [prev-wrapped-props next-wrapped-props]
-  (and (some? prev-wrapped-props)
-       (some? next-wrapped-props)
-       (= (unwrap-props prev-wrapped-props)
-          (unwrap-props next-wrapped-props))))
-
-(defn- create-component-element [component props children memo?]
+(defn- create-cljs-component-element [component props children memo?]
   (let [type (if memo?
                (or (unchecked-get component memo-wrapper-key)
-                   (let [wrapper (wrapper-component component)
+                   (let [wrapper (cljs-component-wrapper component)
                          memo (reactjs/memo wrapper memo-eq)]
                      (unchecked-set component memo-wrapper-key memo)
                      memo))
                (or (unchecked-get component wrapper-key)
-                   (let [wrapper (wrapper-component component)]
+                   (let [wrapper (cljs-component-wrapper component)]
                      (unchecked-set component wrapper-key wrapper)
                      wrapper)))]
-    (reactjs/createElement type (wrap-props props children))))
+    (if-some [key (:key props)]
+      (jsxs type #js {:p (dissoc props :key) :c children} (->jsx-prop-value key))
+      (jsxs type #js {:p props :c children}))))
 
 (defn- hiccup->element [[type & [props & children :as props+children] :as hiccup]]
   (let [props (when (map? props) props)
@@ -193,17 +203,12 @@
                    (unwrap-delegated-children props+children))]
     (cond
       (= :<> type) (create-fragment props children)
-      (or (keyword? type)
-          (string? type)) (create-intrinsic-element (parse-tag type) props children)
+      (keyword? type) (create-intrinsic-element (parse-keyword-tag type) props children)
+      (string? type) (create-intrinsic-element (parse-string-tag type) props children)
       (or (fn? type)
-          (ifn? type)) (create-component-element type props children (:memo (meta hiccup)))
-      (some? (.-$$typeof type)) (create-component-element type props children false)
+          (ifn? type)) (create-cljs-component-element type props children (:memo (meta hiccup)))
+      (some? (.-$$typeof type)) (create-native-component-element type props children)
       :else (throw (js/Error. (str "Invalid hiccup tag type: " (type type)))))))
-
-(defn- array-of-elements [xs]
-  (let [elems #js []]
-    (doseq [x xs] (.push elems (as-element x)))
-    elems))
 
 ;;;;;
 
@@ -225,7 +230,9 @@
   (cond
     (vector? x) (hiccup->element x)
     (primitive? x) x
-    (seq? x) (array-of-elements x)
+    (seq? x) (let [elems #js []]
+               (doseq [el x] (.push elems (as-element el)))
+               elems)
     (keyword? x) (fq-name x)
     (symbol? x) (fq-name x)
     (satisfies? IPrintWithWriter x) (pr-str x)
