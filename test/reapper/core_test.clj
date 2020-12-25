@@ -1,7 +1,5 @@
 (ns reapper.core-test
-  (:require [clojure.test :refer :all]
-            [reapper.core :refer :all]))
-
+  (:require [clojure.test :refer :all]))
 
 (deftest a-test
   (testing "FIXME, I don't fail."
