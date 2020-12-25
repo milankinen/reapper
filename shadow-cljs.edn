@@ -1,0 +1,14 @@
+{:dev-http
+ {8080 "dev/public"}
+ :nrepl
+ {:port       9876
+  :middleware []}
+ :lein
+ {:profile "+dev"}
+ :cache-root
+ "target/.shadow-cljs"
+ :builds
+ {:dev
+  {:target     :browser
+   :output-dir "dev/public/js"
+   :modules    {:main {:init-fn reapper.dev.main/-main}}}}}

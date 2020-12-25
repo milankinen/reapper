@@ -2,6 +2,8 @@
 /classes
 /checkouts
 /.clj-kondo/.cache
+/node_modules
+/dev/public/js
 pom.xml
 pom.xml.asc
 *.jar
