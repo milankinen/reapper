@@ -13,7 +13,10 @@
                    :dependencies [[org.clojure/clojure "1.10.1"]
                                   [thheller/shadow-cljs "2.11.10"]
                                   [eftest "0.5.9"]
-                                  [clj-kondo "2020.12.12"]]}}
+                                  [clj-kondo "2020.12.12"]]}
+             ;; Add this profile to Idea's active profiles
+             ;; in order to enable cljs library support
+             :idea {:dependencies [[org.clojure/clojurescript "1.10.758"]]}}
   :deploy-repositories [["releases" :clojars]]
   :aliases {"i"    ["do"
                     ["deps"]
