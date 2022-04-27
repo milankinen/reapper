@@ -1,5 +1,6 @@
 (ns reapper.dev.main
-  (:require [reapper.react :as react]))
+  (:require [reapper.refresh :as refresh]
+            [reapper.react :as react]))
 
 (defn count-reducer [count {:keys [type]}]
   (case type
@@ -24,8 +25,16 @@
   [:<>
    [:div
     [:h1 "Tsers!!!"]
+    ^:memo
     [counter]]])
 
 (defn -main []
+  (refresh/enable! 'reapper.dev)
   (let [el$ (js/document.getElementById "app")]
     (react/render [app] el$)))
+
+(defn- ^:dev/before-load before-load []
+  (refresh/before-load))
+
+(defn- ^:dev/after-load after-load []
+  (refresh/after-load))

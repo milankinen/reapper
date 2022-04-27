@@ -114,6 +114,7 @@
         (unchecked-set jsx-props "children" js-children)))
     jsx-props))
 
+
 (defn- unwrap-delegated-children [children]
   (when (seq children)
     (if (and (empty? (next children))
@@ -152,9 +153,6 @@
 (def ^:private wrapper-key
   (js/Symbol "reapper$$wrapper"))
 
-(def ^:private memo-wrapper-key
-  (js/Symbol "reapper$$memo$$wrapper"))
-
 (defn- memo-eq [prev-js-props next-js-props]
   (and (some? prev-js-props)
        (some? next-js-props)
@@ -162,6 +160,13 @@
           (unchecked-get next-js-props "p"))
        (= (unchecked-get prev-js-props "c")
           (unchecked-get next-js-props "c"))))
+
+(defn- render-component [component props]
+  (if goog/DEBUG
+    (if-let [refresh-renderer (unchecked-get js/window "__reapper_refresh_renderer__")]
+      (refresh-renderer component props)
+      (component props))
+    (component props)))
 
 (defn- cljs-component-wrapper [component]
   (let [wrapper (fn cljs-wrapper [js-props]
@@ -171,7 +176,11 @@
                         props (if children
                                 (assoc props' :children children)
                                 props')
-                        result (component props)]
+                        result (if goog/DEBUG
+                                 (if-let [refresh-renderer (unchecked-get js/window "__reapper_refresh_renderer__")]
+                                   (refresh-renderer component props wrapper-key)
+                                   (component props))
+                                 (component props))]
                     (as-element result)))
         display-name (when-let [s (or (.-displayName component)
                                       (.-name component))]
@@ -187,17 +196,11 @@
     (unchecked-set wrapper "displayName" display-name)
     wrapper))
 
-(defn- create-cljs-component-element [component props children memo?]
-  (let [type (if memo?
-               (or (unchecked-get component memo-wrapper-key)
-                   (let [wrapper (cljs-component-wrapper component)
-                         memo (reactjs/memo wrapper memo-eq)]
-                     (unchecked-set component memo-wrapper-key memo)
-                     memo))
-               (or (unchecked-get component wrapper-key)
-                   (let [wrapper (cljs-component-wrapper component)]
-                     (unchecked-set component wrapper-key wrapper)
-                     wrapper)))]
+(defn- create-cljs-component-element [component props children]
+  (let [type (or (unchecked-get component wrapper-key)
+                 (let [wrapper (cljs-component-wrapper component)]
+                   (unchecked-set component wrapper-key wrapper)
+                   wrapper))]
     (if-some [key (:key props)]
       (jsxs type #js {:p (dissoc props :key) :c children} (->jsx-prop-value key))
       (jsxs type #js {:p props :c children}))))
@@ -214,7 +217,7 @@
       (keyword? type) (create-intrinsic-element (parse-keyword-tag type) props children)
       (string? type) (create-intrinsic-element (parse-string-tag type) props children)
       (or (fn? type)
-          (ifn? type)) (create-cljs-component-element type props children (:memo (meta hiccup)))
+          (ifn? type)) (create-cljs-component-element type props children)
       (some? (.-$$typeof type)) (create-native-component-element type props children)
       :else (throw (js/Error. (str "Invalid hiccup tag type: " (type type)))))))
 
